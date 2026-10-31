@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ampliador Auditivo</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--tx:#14171a;--mut:#5b6570;--ac:#0b6bcb;--bd:#d8dde3;--warn:#b42318;--ok:#1a7f4b;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101316;--card:#1a1f24;--tx:#eef1f4;--mut:#9aa5b1;--ac:#4aa3ff;--bd:#2c343c;--warn:#ff8a80;--ok:#5fd394;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#101316;--card:#1a1f24;--tx:#eef1f4;--mut:#9aa5b1;--ac:#4aa3ff;--bd:#2c343c;--warn:#ff8a80;--ok:#5fd394;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:1.3rem;margin:4px 0 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:12px}
+.warn{border-color:var(--warn);color:var(--warn);font-size:.9rem}
+button.main{width:100%;padding:16px;font-size:1.1rem;font-weight:600;border:0;border-radius:12px;background:var(--ac);color:#fff}
+button.main.on{background:var(--warn)}
+label{display:flex;justify-content:space-between;font-weight:600;margin-bottom:6px}
+label span{color:var(--ac);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;margin:0 0 14px}
+select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx);margin-bottom:10px}
+.row{display:flex;gap:8px;align-items:center;margin:6px 0}
+.meter{height:14px;background:var(--bd);border-radius:7px;overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--ok);transition:width .05s}
+.meter i.hot{background:var(--warn)}
+small{color:var(--mut)}
+#msg{color:var(--warn);font-size:.9rem;min-height:1.2em;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>🎧 Ampliador Auditivo</h1>
+
+<div class="card warn"><strong>Atenção:</strong> ganho alto pode causar dano auditivo permanente. Comece com o ganho baixo e o volume do celular baixo, e só então suba. Não use com o microfone perto do fone (gera microfonia).</div>
+
+<div class="card">
+<button id="go" class="main">Iniciar</button>
+<div id="msg"></div>
+<div class="meter" style="margin-top:12px"><i id="lvl"></i></div>
+<small id="status">Parado</small>
+</div>
+
+<div class="card">
+<label>Ganho <span id="gv">5x (14 dB)</span></label>
+<input id="gain" type="range" min="0" max="100" value="30">
+<label>Teto de volume de saída <span id="cv">30%</span></label>
+<input id="ceil" type="range" min="2" max="100" value="30">
+<label>Realce de agudos (voz) <span id="tv">+6 dB</span></label>
+<input id="treb" type="range" min="0" max="18" value="6">
+</div>
+
+<div class="card">
+<label>Microfone de entrada</label>
+<select id="dev"><option value="">Padrão do dispositivo</option></select>
+<div class="row"><input type="checkbox" id="ns" checked><label for="ns" style="margin:0;font-weight:400">Supressão de ruído</label></div>
+<div class="row"><input type="checkbox" id="ec"><label for="ec" style="margin:0;font-weight:400">Cancelamento de eco</label></div>
+<div class="row"><input type="checkbox" id="agc"><label for="agc" style="margin:0;font-weight:400">Controle automático de ganho</label></div>
+<small>Mudou uma opção ou o microfone? Pare e inicie de novo.</small>
+</div>
+
+<div class="card">
+<small><strong>Dica importante:</strong> se o microfone do próprio fone Bluetooth for usado, o áudio cai para qualidade de ligação e o atraso aumenta. O melhor resultado costuma ser usar o microfone do celular como entrada e o fone Bluetooth só como saída. Atraso de Bluetooth (100–250 ms) não tem como eliminar. Para atraso baixo de verdade, use fone com fio.</small>
+</div>
+</main>
+
+<script>
+(function(){
+var ctx,stream,nodes={},running=false,raf;
+var $=function(i){return document.getElementById(i)};
+function gainVal(){var v=+$('gain').value/100;return Math.pow(200,v)}
+function updLabels(){
+  var g=gainVal();$('gv').textContent=(g<10?g.toFixed(1):Math.round(g))+'x ('+Math.round(20*Math.log10(g))+' dB)';
+  $('cv').textContent=$('ceil').value+'%';
+  $('tv').textContent='+'+$('treb').value+' dB';
+  if(nodes.gain){
+    var t=ctx.currentTime;
+    nodes.gain.gain.setTargetAtTime(g,t,0.03);
+    nodes.out.gain.setTargetAtTime(+$('ceil').value/100,t,0.03);
+    nodes.shelf.gain.setTargetAtTime(+$('treb').value,t,0.03);
+  }
+}
+['gain','ceil','treb'].forEach(function(i){$(i).addEventListener('input',updLabels)});
+updLabels();
+
+async function listDevs(){
+  try{
+    var d=await navigator.mediaDevices.enumerateDevices(),s=$('dev'),cur=s.value;
+    s.innerHTML='<option value="">Padrão do dispositivo</option>';
+    d.filter(function(x){return x.kind==='audioinput'}).forEach(function(x,i){
+      var o=document.createElement('option');o.value=x.deviceId;o.textContent=x.label||('Microfone '+(i+1));s.appendChild(o)});
+    s.value=cur;
+  }catch(e){}
+}
+
+async function start(){
+  $('msg').textContent='';
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){$('msg').textContent='Este navegador não permite acesso ao microfone. Abra em uma aba normal do Chrome ou Safari (HTTPS).';return}
+  try{
+    var c={echoCancellation:$('ec').checked,noiseSuppression:$('ns').checked,autoGainControl:$('agc').checked,channelCount:1};
+    if($('dev').value)c.deviceId={exact:$('dev').value};
+    stream=await navigator.mediaDevices.getUserMedia({audio:c});
+  }catch(e){
+    $('msg').textContent=(e&&e.name==='NotAllowedError')?'Permissão do microfone negada. Libere nas configurações do navegador (se estiver dentro do chat, abra o link em uma aba própria).':'Erro ao acessar o microfone: '+(e&&e.message||e);
+    return;
+  }
+  ctx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
+  var src=ctx.createMediaStreamSource(stream);
+  var hp=ctx.createBiquadFilter();hp.type='highpass';hp.frequency.value=120;
+  var shelf=ctx.createBiquadFilter();shelf.type='highshelf';shelf.frequency.value=2000;shelf.gain.value=+$('treb').value;
+  var gain=ctx.createGain();gain.gain.value=gainVal();
+  var lim=ctx.createDynamicsCompressor();
+  lim.threshold.value=-18;lim.knee.value=0;lim.ratio.value=20;lim.attack.value=0.002;lim.release.value=0.12;
+  var out=ctx.createGain();out.gain.value=+$('ceil').value/100;
+  var an=ctx.createAnalyser();an.fftSize=512;
+  src.connect(hp);hp.connect(shelf);shelf.connect(gain);gain.connect(lim);lim.connect(out);out.connect(an);an.connect(ctx.destination);
+  nodes={gain:gain,out:out,shelf:shelf,an:an};
+  running=true;
+  $('go').textContent='Parar';$('go').classList.add('on');
+  var lat=Math.round(((ctx.baseLatency||0)+(ctx.outputLatency||0))*1000);
+  $('status').textContent='Ao vivo'+(lat?' · latência local ~'+lat+' ms':'');
+  var buf=new Uint8Array(an.fftSize);
+  (function loop(){
+    if(!running)return;
+    an.getByteTimeDomainData(buf);
+    var m=0;for(var i=0;i<buf.length;i++){var v=Math.abs(buf[i]-128)/128;if(v>m)m=v}
+    var el=$('lvl');el.style.width=Math.min(100,m*100)+'%';el.classList.toggle('hot',m>0.8);
+    raf=requestAnimationFrame(loop);
+  })();
+  listDevs();
+}
+
+function stop(){
+  running=false;cancelAnimationFrame(raf);
+  if(stream)stream.getTracks().forEach(function(t){t.stop()});
+  if(ctx)ctx.close();
+  nodes={};
+  $('go').textContent='Iniciar';$('go').classList.remove('on');
+  $('status').textContent='Parado';$('lvl').style.width='0';
+}
+
+$('go').addEventListener('click',function(){running?stop():start()});
+document.addEventListener('visibilitychange',function(){if(running&&ctx&&ctx.state==='suspended')ctx.resume()});
+})();
+</script>
+</body>
+</html>
